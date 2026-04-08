@@ -1,0 +1,6 @@
+@CWNS.BackEnd_HostAddress = http://localhost:5058
+
+GET {{CWNS.BackEnd_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
