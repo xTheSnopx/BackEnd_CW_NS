@@ -43,6 +43,10 @@ namespace CWNS.BackEnd.Controllers
             try 
             {
                 using var client = new HttpClient();
+                client.Timeout = TimeSpan.FromSeconds(15);
+                client.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+                client.DefaultRequestHeaders.Add("Accept", "application/json, text/plain, */*");
+                client.DefaultRequestHeaders.Add("Referer", "https://ninjasaga.cc/");
                 var response = await client.GetAsync(url);
                 if (response.IsSuccessStatusCode)
                 {
@@ -52,85 +56,78 @@ namespace CWNS.BackEnd.Controllers
                     
                     if (payload != null && payload["clans"] is System.Text.Json.Nodes.JsonArray clansArray)
                     {
-                        var target6h = DateTime.UtcNow.AddHours(-6);
-                        var target24h = DateTime.UtcNow.AddHours(-24);
-
-                        // Optimizado: obtener la última rep registrada ANTES del target6h para CADA miembro
-                        var past6hLogs = await _context.MemberReputationLogs
-                            .Where(l => l.Timestamp <= target6h)
-                            .GroupBy(l => new { l.ClanId, l.MemberName })
-                            .Select(g => new { 
-                                ClanId = g.Key.ClanId, 
-                                Points = g.OrderByDescending(x => x.Timestamp).Select(x => x.Points).FirstOrDefault() 
-                            })
-                            .ToListAsync();
-
-                        var target2h = DateTime.UtcNow.AddHours(-2);
-                        var past2hLogs = await _context.MemberReputationLogs
-                            .Where(l => l.Timestamp <= target2h)
-                            .GroupBy(l => new { l.ClanId, l.MemberName })
-                            .Select(g => new { 
-                                ClanId = g.Key.ClanId, 
-                                MemberName = g.Key.MemberName,
-                                Points = g.OrderByDescending(x => x.Timestamp).Select(x => x.Points).FirstOrDefault() 
-                            })
-                            .ToListAsync();
-                        var clanMemberReps2h = past2hLogs.GroupBy(x => x.ClanId).ToDictionary(g => g.Key, g => g.ToDictionary(m => m.MemberName, m => (long)m.Points));
-
-                        var past24hLogs = await _context.MemberReputationLogs
-                            .Where(l => l.Timestamp <= target24h)
-                            .GroupBy(l => new { l.ClanId, l.MemberName })
-                            .Select(g => new { 
-                                ClanId = g.Key.ClanId, 
-                                Points = g.OrderByDescending(x => x.Timestamp).Select(x => x.Points).FirstOrDefault() 
-                            })
-                            .ToListAsync();
-
-                        var clanRep6h = past6hLogs.GroupBy(x => x.ClanId).ToDictionary(g => g.Key, g => g.Sum(x => (long)x.Points));
-                        var clanRep24h = past24hLogs.GroupBy(x => x.ClanId).ToDictionary(g => g.Key, g => g.Sum(x => (long)x.Points));
-
-                        foreach (var node in clansArray)
+                        // Try to enrich with DB deltas - if DB is unavailable, still return raw data
+                        try
                         {
-                            if (node is System.Text.Json.Nodes.JsonObject clanObj)
-                            {
-                                var clanName = clanObj["name"]?.ToString();
-                                var currentRepNode = clanObj["reputation"];
-                                long currentRep = currentRepNode != null ? currentRepNode.GetValue<long>() : 0;
-                                
-                                if (!string.IsNullOrEmpty(clanName))
-                                {
-                                    long rep6h = clanRep6h.ContainsKey(clanName) ? clanRep6h[clanName] : currentRep; // If 0 tracking history, delta is 0
-                                    long rep24h = clanRep24h.ContainsKey(clanName) ? clanRep24h[clanName] : currentRep;
-                                    
-                                    clanObj["sixHourDelta"] = currentRep - rep6h;
-                                    clanObj["twentyFourHourDelta"] = currentRep - rep24h;
+                            var target6h = DateTime.UtcNow.AddHours(-6);
+                            var target24h = DateTime.UtcNow.AddHours(-24);
+                            var target2h = DateTime.UtcNow.AddHours(-2);
 
-                                    int activeCount = 0;
-                                    if (clanObj["member_list"] is System.Text.Json.Nodes.JsonArray memberList)
+                            var past6hLogs = await _context.MemberReputationLogs
+                                .Where(l => l.Timestamp <= target6h)
+                                .GroupBy(l => new { l.ClanId, l.MemberName })
+                                .Select(g => new { ClanId = g.Key.ClanId, Points = g.OrderByDescending(x => x.Timestamp).Select(x => x.Points).FirstOrDefault() })
+                                .ToListAsync();
+
+                            var past2hLogs = await _context.MemberReputationLogs
+                                .Where(l => l.Timestamp <= target2h)
+                                .GroupBy(l => new { l.ClanId, l.MemberName })
+                                .Select(g => new { ClanId = g.Key.ClanId, MemberName = g.Key.MemberName, Points = g.OrderByDescending(x => x.Timestamp).Select(x => x.Points).FirstOrDefault() })
+                                .ToListAsync();
+
+                            var past24hLogs = await _context.MemberReputationLogs
+                                .Where(l => l.Timestamp <= target24h)
+                                .GroupBy(l => new { l.ClanId, l.MemberName })
+                                .Select(g => new { ClanId = g.Key.ClanId, Points = g.OrderByDescending(x => x.Timestamp).Select(x => x.Points).FirstOrDefault() })
+                                .ToListAsync();
+
+                            var clanRep6h = past6hLogs.GroupBy(x => x.ClanId).ToDictionary(g => g.Key, g => g.Sum(x => (long)x.Points));
+                            var clanRep24h = past24hLogs.GroupBy(x => x.ClanId).ToDictionary(g => g.Key, g => g.Sum(x => (long)x.Points));
+                            var clanMemberReps2h = past2hLogs.GroupBy(x => x.ClanId).ToDictionary(g => g.Key, g => g.ToDictionary(m => m.MemberName, m => (long)m.Points));
+
+                            foreach (var node in clansArray)
+                            {
+                                if (node is System.Text.Json.Nodes.JsonObject clanObj)
+                                {
+                                    var clanName = clanObj["name"]?.ToString();
+                                    var currentRepNode = clanObj["reputation"];
+                                    long currentRep = currentRepNode != null ? currentRepNode.GetValue<long>() : 0;
+                                    
+                                    if (!string.IsNullOrEmpty(clanName))
                                     {
-                                        var pastMembers = clanMemberReps2h.ContainsKey(clanName) ? clanMemberReps2h[clanName] : new Dictionary<string, long>();
-                                        foreach (var mNode in memberList)
+                                        long rep6h = clanRep6h.ContainsKey(clanName) ? clanRep6h[clanName] : currentRep;
+                                        long rep24h = clanRep24h.ContainsKey(clanName) ? clanRep24h[clanName] : currentRep;
+                                        clanObj["sixHourDelta"] = currentRep - rep6h;
+                                        clanObj["twentyFourHourDelta"] = currentRep - rep24h;
+
+                                        int activeCount = 0;
+                                        if (clanObj["member_list"] is System.Text.Json.Nodes.JsonArray memberList)
                                         {
-                                            if (mNode is System.Text.Json.Nodes.JsonObject mObj)
+                                            var pastMembers = clanMemberReps2h.ContainsKey(clanName) ? clanMemberReps2h[clanName] : new Dictionary<string, long>();
+                                            foreach (var mNode in memberList)
                                             {
-                                                var mName = mObj["name"]?.ToString();
-                                                var mRepNode = mObj["reputation"];
-                                                long mRep = mRepNode != null ? mRepNode.GetValue<long>() : 0;
-                                                
-                                                if (!string.IsNullOrEmpty(mName))
+                                                if (mNode is System.Text.Json.Nodes.JsonObject mObj)
                                                 {
-                                                    long pastRep = pastMembers.ContainsKey(mName) ? pastMembers[mName] : 0;
-                                                    if (pastRep > 0 && mRep > pastRep)
+                                                    var mName = mObj["name"]?.ToString();
+                                                    var mRepNode = mObj["reputation"];
+                                                    long mRep = mRepNode != null ? mRepNode.GetValue<long>() : 0;
+                                                    if (!string.IsNullOrEmpty(mName))
                                                     {
-                                                        activeCount++;
+                                                        long pastRep = pastMembers.ContainsKey(mName) ? pastMembers[mName] : 0;
+                                                        if (pastRep > 0 && mRep > pastRep) activeCount++;
                                                     }
                                                 }
                                             }
                                         }
+                                        clanObj["activeMembers"] = activeCount;
                                     }
-                                    clanObj["activeMembers"] = activeCount;
                                 }
                             }
+                        }
+                        catch (Exception dbEx)
+                        {
+                            // DB unavailable - return raw NinjaSaga data (deltas will be 0)
+                            Console.WriteLine("DB enrichment skipped: " + dbEx.Message);
                         }
                         
                         return Ok(payload);

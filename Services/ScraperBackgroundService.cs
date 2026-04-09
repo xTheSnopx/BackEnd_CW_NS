@@ -44,6 +44,10 @@ namespace CWNS.BackEnd.Services
             _logger = logger;
             _serviceProvider = serviceProvider;
             _httpClient = new HttpClient();
+            _httpClient.Timeout = TimeSpan.FromSeconds(15);
+            _httpClient.DefaultRequestHeaders.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+            _httpClient.DefaultRequestHeaders.Add("Accept", "application/json, text/plain, */*");
+            _httpClient.DefaultRequestHeaders.Add("Referer", "https://ninjasaga.cc/");
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
