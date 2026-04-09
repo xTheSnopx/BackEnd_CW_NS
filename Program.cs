@@ -12,8 +12,15 @@ builder.Services.AddEndpointsApiExplorer();
 
 // Setup MySQL EF Core
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
+if (string.IsNullOrEmpty(connectionString))
+{
+    Console.WriteLine("CRITICAL: DefaultConnection is missing from environment variables.");
+    // Fallback or throw
+}
+
+// Fix Render Linux Exit 139 by avoiding native AutoDetect network probing during startup
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseMySql(connectionString, ServerVersion.AutoDetect(connectionString)));
+    options.UseMySql(connectionString, new MySqlServerVersion(new Version(8, 0, 32))));
 
 builder.Services.AddHostedService<CWNS.BackEnd.Services.ScraperBackgroundService>();
 
